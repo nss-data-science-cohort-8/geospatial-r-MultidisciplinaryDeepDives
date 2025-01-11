@@ -9,6 +9,9 @@ Part 1
 ```{r}
 #install.packages("sf")
 #install.packages("leaflet")
+#install.packages("lme4")
+#install.packages("AER")
+#install.packages("MASS")
 library(sf)
 library(tidyverse) 
 library(lme4)
@@ -51,6 +54,23 @@ Burglaries2023 <- read_csv("../data/burglaries_2023.csv")
 Burglaries2023
 ```
 
+
+
+```{r}
+
+Burglaries2023 <- Burglaries2023 |> 
+  distinct(incident_number, .keep_all = TRUE) |> 
+  drop_na(latitude) 
+  # |> 
+  # select(incident_number, latitude, longitude)   
+
+Burglaries2023 
+
+```
+
+
+
+
 Let's extract the latitude and longitude using the str_extract function from stringr.
 
 ```{r}
@@ -79,6 +99,7 @@ It appears that some of the burglary incidents are outside of Davidson County. W
 If we want to be able to perform geospatial operations on our bus stops, we need to convert it into a geospatial object. We can do this using the st_as_sf function.
 
 ```{r}
+
 Burglaries2023_geo <- st_as_sf(
   Burglaries2023 |> drop_na(latitude),
   coords = c('longitude', 'latitude'),
@@ -86,6 +107,7 @@ Burglaries2023_geo <- st_as_sf(
 )
 
 Burglaries2023_geo
+
 ```
 
 side note / clarification: crs = st_crs(CensusTracts) is using the CensusTracts' metadata to set up projection, not using the geo coordinates within the shape files. 
@@ -108,7 +130,7 @@ st_contains is left join
 
 
 ```{r}
-# Burglaries2023_CensusTracts <- st_join(Burglaries2023_geo, CensusTracts, join = st_within)
+# Burglaries2023_CensusTracts <- st_join(Burglaries2023_geo, CensusTracts, join = st_within)  
 # Burglaries2023_CensusTracts
 ```  
 
@@ -117,28 +139,50 @@ CRS = Coordinate Ref System
 
 
 ```{r}
-Burglaries2023_CensusTracts_alt <- st_join(Burglaries2023_geo, CensusTracts, join = st_within, left = FALSE)
-Burglaries2023_CensusTracts_alt
+Burglaries2023_CensusTracts <- st_join(Burglaries2023_geo, CensusTracts, join = st_within, left = FALSE)  
+Burglaries2023_CensusTracts
 ```  
 
 side note: in this case / step, we are using the geo coordinates in CensusTracts
 
 
 
-
-Plotting of the bus stops within Davidson County:
 ```{r}
+
+Burglaries2023_CensusTracts |> 
+                                filter(is.na(incident_number))  
+
+```
+
+
+
+
+
+
+
+
+
+Plotting of Burglary Incidents within Davidson County:
+```{r}
+
 CensusTracts |> 
   ggplot() +
   geom_sf() +
-  geom_sf(data = Burglaries2023_CensusTracts_alt, size = 0.1)
+  geom_sf(data = Burglaries2023_CensusTracts, size = 0.1)
+
 ```
 
 
 Notice that bus_zips retains the geometry of bus_stops, as this was the first dataframe we provided. Now, we can, for example, count the number of stops per zipcode. Note that when performing calculations on an sf object, it is usually quicker if you drop the geometry first.
 
 ```{r}
-Burglaries2023_CensusTracts_alt |> 
+Burglaries2023_CensusTracts |> 
+  filter(is.na(incident_number))
+```
+
+
+```{r}
+Burglaries2023_CensusTracts |> 
   st_drop_geometry() |> 
   group_by(GEOID) |> 
   count(name = "incident_number") |> 
@@ -194,20 +238,13 @@ leaflet(Burglaries2023 |> drop_na(longitude)) %>%
 Part 2 -
 
 
-
-
-```{r}
-
-# Burglaries2023_CensusTracts <- Burglaries2023_CensusTracts |>  mutate_at(c('TRACTCE'), as.numeric)
-# Burglaries2023_CensusTracts
-
-```
+ 
 
 Read in the CSV that contains data on Median Income and Population from Census:
 
 ```{r}
-Pop_Income_Census <- read_csv("../data/census.csv")
-Pop_Income_Census
+census <- read_csv("../data/census.csv")
+census
 ```
 
 Preparing for inner join by 
@@ -215,42 +252,103 @@ Preparing for inner join by
 
 ```{r}
 
-Burglaries2023_CensusTracts_alt <- rename(Burglaries2023_CensusTracts_alt, tract = TRACTCE)
+Burglaries2023_CensusTracts <- Burglaries2023_CensusTracts  |>  
+  group_by(TRACTCE) |> 
+  summarize(num_burglaries = n_distinct(incident_number, na.rm = TRUE)) |> 
+  arrange(desc(num_burglaries))  |>  
+  rename(tract = TRACTCE)  |>  
+  right_join(census)
+
+Burglaries2023_CensusTracts
 
 ```
 
-(2) Since an incidence record exists for each victim and that some incidences involve multiple victims, (in preparation for subsequent steps) we will deduplicate records of incidence down to 1 record per incidence: 
+
+
+EDA: initial exploration ~
+
+
+Let's look at the distributions of population size by tract, since tracts with larger population may have more burglaries. 
+
+```{r}
+Burglaries2023_CensusTracts |> 
+  ggplot(aes(x = population)) +
+  geom_histogram()
+```
+
+Let's also peruse the distribution of median income: 
+
+```{r}
+Burglaries2023_CensusTracts |> 
+  ggplot(aes(x = median_income)) +
+  geom_histogram()
+```
+
+
+```{r}
+Burglaries2023_CensusTracts  |> 
+  arrange(population)
+```
+
+We need to drop rows with negative median income:
 
 ```{r}
 
-Burglaries2023_CensusTracts_alt_dedup <- Burglaries2023_CensusTracts_alt[!duplicated(Burglaries2023_CensusTracts_alt[c('incident_number')]), ]
-
-Burglaries2023_CensusTracts_alt_dedup
+Burglaries2023_CensusTracts <- Burglaries2023_CensusTracts  |> 
+  filter(population > 0, median_income > 0)
 
 ```
 
 
 
-Perform inner join by census tract:
+
+```{r}
+ 
+Burglaries2023_CensusTracts |> 
+  ggplot(aes(x = median_income)) +
+  geom_histogram() 
+
+```
+
+
+
+
 
 ```{r}
 
-# CensusDemographics_Burglaries2023_CensusTracts <- st_join(Burglaries2023_geo, CensusTracts, join = st_within)
-# CensusDemographics_Burglaries2023_CensusTracts
-
-CensusInfo_Burglaries2023_CensusTracts <- Burglaries2023_CensusTracts_alt_dedup |> inner_join(Pop_Income_Census, by = join_by(tract))
+Burglaries2023_CensusTracts |> 
+  ggplot(aes(x = num_burglaries)) +
+  geom_histogram()
 
 ```
+
+
+```{r}
+Burglaries2023_CensusTracts |> 
+  ggplot(aes(x = median_income, y = num_burglaries)) +
+  geom_point()
+```
+
+
+And on a per thousand population basis.
+
+```{r}
+Burglaries2023_CensusTracts  |>  
+  mutate(burglaries_per_thousand = num_burglaries / (population/1000)) |> 
+  ggplot(aes(x = median_income, y = burglaries_per_thousand)) +
+  geom_point()
+```
+
 
 
 Aggregate data by census tract. Which census tract had the highest number of burglaries? 
 
-Ans: Census Tract 016000
+Ans: Census Tract 016000, which has 39 burglaries 
 
 ```{r}
-IncidenceCount_byTract <- CensusInfo_Burglaries2023_CensusTracts |> group_by(tract) |> tally(sort = TRUE)
-IncidenceCount_byTract
-
+Burglaries2023_CensusTracts |> 
+                    arrange(desc(num_burglaries)) |> 
+                    head(1)
 ```
 
 
@@ -258,15 +356,13 @@ IncidenceCount_byTract
  
 Which census tract had the highest number of burglaries per 1000 residents?
 
-Ans: Tract 016000 has the Incidence Proportion of 15.1750973 per 1000 residents. 
+Ans: Tract 016000 has the Incidence Proportion of 15.1750973 incidents per 1000 residents. 
 
 
 ```{r}
 
-IncidenceProportion_byTract <- CensusInfo_Burglaries2023_CensusTracts |> 
-                                  group_by(tract) |> 
-                                  add_tally(sort = TRUE) |> 
-                                  mutate(Incidents_Per_1000_Residents = n / population * 1000 ) |> 
+IncidenceProportion_byTract <- Burglaries2023_CensusTracts |> 
+                                  mutate(Incidents_Per_1000_Residents = num_burglaries / (population/1000)) |> 
                                   arrange(desc(Incidents_Per_1000_Residents)) |> 
                                   filter(Incidents_Per_1000_Residents != "Inf") 
 
@@ -282,11 +378,10 @@ IncidenceProportion_byTract
 # 
 
 
-IncidenceProportion_byTract_Dedup_ArrangeByMedIncome <- IncidenceProportion_byTract   |>
-                                          group_by(tract) |>
-                                          arrange(median_income) |>
-                                          filter(row_number()==1)
-IncidenceProportion_byTract_Dedup_ArrangeByMedIncome
+IncidenceProportion_byTract_ArrangeByMedIncome <- IncidenceProportion_byTract   |> 
+                                                     arrange(median_income)  
+                                           
+IncidenceProportion_byTract_ArrangeByMedIncome
 
 ```
 
@@ -295,9 +390,13 @@ Finally, look at the relationship between median income and number of aggravated
 
 Ans: For every additional dollar in a census tract's Median Income, we see a decrease of -2.385e-05 burglary incidents per 1000 people (Incidence Proportion). 
 
+
+
+
+
 ```{r}
 
-lr_MedIncome_IncidenceProportion <- glm(Incidents_Per_1000_Residents ~ median_income, family = gaussian(link = "identity"), data = IncidenceProportion_byTract_Dedup_ArrangeByMedIncome)
+lr_MedIncome_IncidenceProportion <- glm(Incidents_Per_1000_Residents ~ median_income, family = gaussian(link = "identity"), data = IncidenceProportion_byTract_ArrangeByMedIncome)
 
 summary(lr_MedIncome_IncidenceProportion)
 
@@ -314,50 +413,135 @@ Steps -
 1) take a natural log of population count
 2) divide incident count by natural log of population count
 
-```{r}
 
-# IncidenceProportion_LnPopulation_tibble <- IncidenceProportion_byTract_Dedup_ArrangeByMedIncome |> 
-#                                                           mutate(Ln_Population = log(population)) |> 
-#                                                           mutate(Incidence_Proportion_LnPopulation = n/Ln_Population)
-# IncidenceProportion_LnPopulation_tibble
 
-```
-```{r}
+### Regression Models
 
-Poisson_Reg_Model_IncidenceProp_corr_MedIncome <- glm(Incidents_Per_1000_Residents ~ median_income, family = "poisson", offset = log(population), data = IncidenceProportion_byTract_Dedup_ArrangeByMedIncome)
-
-summary(Poisson_Reg_Model_IncidenceProp_corr_MedIncome)
-
-```
-Alternative (potentially more correct / better) approach:
-
+   
 
 ```{r}
  
 
-Poisson_Reg_Model_IncidenceProp_corr_MedIncome_alt <- glm(n ~ median_income + population + population:median_income, family = "poisson", offset = log(population), data = IncidenceProportion_byTract_Dedup_ArrangeByMedIncome)
+Poisson_RegModel_IncidenceProp_corr_MedIncome <- glm(num_burglaries ~ median_income + population + population:median_income, family = "poisson", offset = log(population), data = IncidenceProportion_byTract_ArrangeByMedIncome)
 
-summary(Poisson_Reg_Model_IncidenceProp_corr_MedIncome_alt)
+summary(Poisson_RegModel_IncidenceProp_corr_MedIncome)
 
 ```
  
+ 
+Reduced model of examining the association between burglary incidence proportion and median income:
+
+
 ```{r}
-var(IncidenceProportion_byTract_Dedup_ArrangeByMedIncome$median_income)
+burg_poisson <- glm(num_burglaries ~ median_income + offset(log(population)), 
+                    family = poisson, 
+                    data =  IncidenceProportion_byTract_ArrangeByMedIncome)
+
+summary(burg_poisson)
 ```
- 
- 
+
+When Median Income = $40000
+and Population = 5000
+10.58664 Burglary Incidents tend to take place.  
 ```{r}
-var(IncidenceProportion_byTract_Dedup_ArrangeByMedIncome$n)
+population = 5000
+exp(-5.184 + log(population) + 40000 * -2.434e-05)
+```
+  
+```{r}
+median_income <- seq(from = 20000, to = 180000, length.out = 5)
+population = 1000
+
+map(median_income, 
+    \(x) tibble(median_income = x, 
+                num_burglaries = 0:20, 
+                probability = dpois(0:20, 
+                                      lambda = predict(Poisson_RegModel_IncidenceProp_corr_MedIncome,
+                                                   newdata = tibble(median_income = x, population = population), type = "response")
+                                    )
+                )
+    ) |> 
+  bind_rows() |> 
+  ggplot(aes(x = num_burglaries, y = probability)) +
+  geom_col() +
+  facet_wrap(~median_income)
+```
+
+
+
+
+```{r}
+library(AER)
+
+dispersiontest(burg_poisson)
+```
+Extra: What about overdispersion? (That is, does the response really follow a Poisson distribution?)
+
+What could go wrong? If the model has overdispersion, our standard errors will be too small, which increases the chances of a Type I error.
+
+A good explanation is available in [this video](https://www.youtube.com/watch?v=uGKnoAw-PFQ). 
+
+
+
+```{r}
+
+Poisson_RegModel_IncidenceProp_corr_MedIncome_QP <- glm(num_burglaries ~ median_income + population + population:median_income, family = "quasipoisson", offset = log(population), data = IncidenceProportion_byTract_ArrangeByMedIncome)
+
+summary(Poisson_RegModel_IncidenceProp_corr_MedIncome_QP)
+
+```
+
+
+```{r} 
+
+library(MASS)
+
+Poisson_RegModel_IncidenceProp_corr_MedIncome_NB <- glm.nb(num_burglaries ~ median_income + population + population:median_income, offset(log(population)), data = IncidenceProportion_byTract_ArrangeByMedIncome)
+
+summary(Poisson_RegModel_IncidenceProp_corr_MedIncome_NB)
+
+```
+
+
+```{r}
+
+Poisson_RegModel_IncidenceProp_corr_MedIncome_NB$theta
+
+```
+
+ 
+```{r} 
+
+
+median_income <- seq(from = 20000, to = 180000, length.out = 5)
+population = 1000
+
+mu <- predict(Poisson_RegModel_IncidenceProp_corr_MedIncome_NB, 
+              newdata = tibble(median_income = median_income,
+                               population = population), 
+              type = "response")
+
+var <- mu + mu^2 / Poisson_RegModel_IncidenceProp_corr_MedIncome_NB$theta
+
+map(median_income, 
+    \(x) tibble(median_income = x, 
+                num_burglaries = 0:20, 
+                probability = dnbinom(0:20, 
+                                      mu = predict(Poisson_RegModel_IncidenceProp_corr_MedIncome_NB,
+                                                   newdata = tibble(median_income = x, population = population), type = "response"),
+                                      size = Poisson_RegModel_IncidenceProp_corr_MedIncome_NB$theta
+                                    )
+                )
+    ) |> 
+  bind_rows() |> 
+  ggplot(aes(x = num_burglaries, y = probability)) +
+  geom_col() +
+  facet_wrap(~median_income)
+
+
 ``` 
 
-```{r}
-var(IncidenceProportion_byTract_Dedup_ArrangeByMedIncome$Incidents_Per_1000_Residents)
-```
  
- 
-```{r}
-summary(IncidenceProportion_byTract_Dedup_ArrangeByMedIncome)
-```
 
 
 
