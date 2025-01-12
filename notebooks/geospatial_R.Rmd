@@ -10,19 +10,22 @@ library(sf)
 library(tidyverse)
 ```
 
-Let's load in our zipcode dataset. This is a geojson file, which was downloaded from https://data.nashville.gov/Metro-Government/Zip-Codes/72um-tmbe. Geosjson is a standard, based on JSON, for representing geographic features.
+Let's load in our zipcode dataset. This is a geojson file, which was downloaded from <https://data.nashville.gov/Metro-Government/Zip-Codes/72um-tmbe>. Geosjson is a standard, based on JSON, for representing geographic features.
+
 ```{r}
 zipcodes <- st_read('../data/zipcodes.geojson')
 ```
 
-Notice that the ouput provides some information about the data we just read in. It contains multipolygons and is using WGS 84 as the CRS, or coordinate reference system, which defines how the points on the globe are mapped to the 2-dimensional projection we are working with. 
+Notice that the ouput provides some information about the data we just read in. It contains multipolygons and is using WGS 84 as the CRS, or coordinate reference system, which defines how the points on the globe are mapped to the 2-dimensional projection we are working with.
 
 The actual object we read in is a simple feature collection, which means that it acts like a data frame, but it also contains additional geographic information.
+
 ```{r}
 zipcodes
 ```
 
-We can create plots out of our geospatial data using ggplot. 
+We can create plots out of our geospatial data using ggplot.
+
 ```{r}
 zipcodes |> 
   ggplot() +
@@ -30,6 +33,7 @@ zipcodes |>
 ```
 
 We can adjust the color using the fill aesthethic.
+
 ```{r}
 zipcodes |> 
   ggplot() +
@@ -37,12 +41,14 @@ zipcodes |>
 ```
 
 We might also want to work with data in the form a csv file.
+
 ```{r}
 bus_stops <- read_csv("../data/WeGo_Transit_Bus_Stops_20231025.csv")
 bus_stops
 ```
 
 Let's extract the latitude and longitude using the str_extract function from stringr.
+
 ```{r}
 bus_stops <- bus_stops |> 
   mutate(
@@ -52,6 +58,7 @@ bus_stops <- bus_stops |>
 ```
 
 Now, we can plot these bus stops. Note that I'll start with the zipcodes plot and then add in the bus stops by using geom_point.
+
 ```{r}
 zipcodes |> 
   ggplot() +
@@ -66,15 +73,19 @@ zipcodes |>
 It appears that some of the bus stops are outside of Davidson County. What if we want to select only those inside the county?
 
 If we want to be able to perform geospatial operations on our bus stops, we need to convert it into a geospatial object. We can do this using the st_as_sf function.
+
 ```{r}
 bus_stops_geo <- st_as_sf(
   bus_stops |> drop_na(latitude),
   coords = c('longitude', 'latitude'),
   crs = st_crs(zipcodes)
 )
+
+bus_stops_geo
 ```
 
 Now, to build our plot, we can use geom_sf.
+
 ```{r}
 zipcodes |> 
   ggplot() +
@@ -82,15 +93,37 @@ zipcodes |>
   geom_sf(data = bus_stops_geo, size = 0.1)
 ```
 
-To select only the bus stops inside the County, we can perform a spatial join. The sf library has an st_join function. We need to specify how to join (contains, intersects, etc.). Here, we'll use containment.
+To select only the bus stops inside the County, we can perform a spatial join. The sf library has an st_join function. We need to specify how to join (contains, intersects, etc.). Here, we'll use containment (which is st_within; plot bus stop as long as it's within zipcode). 
+
+st_contains is left join
+ 
+
 
 ```{r}
 bus_zips <- st_join(bus_stops_geo, zipcodes, join = st_within)
 bus_zips
+```  
+
+Alternatively, we can narrow down to bus stops that are within Davidson County.
+CRS = Coordinate Ref System
+
+
+```{r}
+bus_zips_alt <- st_join(bus_stops_geo, zipcodes, join = st_within, left = FALSE)
+bus_zips_alt
+```  
+
+Plotting of the bus stops within Davidson County:
+```{r}
+zipcodes |> 
+  ggplot() +
+  geom_sf() +
+  geom_sf(data = bus_zips_alt, size = 0.1)
 ```
 
-Notice that bus_zips retains the geometry of bus_stops, as this was the first dataframe we provided.
-Now, we can, for example, count the number of stops per zipcode. Note that when performing calculations on an sf object, it is usually quicker if you drop the geometry first.
+
+Notice that bus_zips retains the geometry of bus_stops, as this was the first dataframe we provided. Now, we can, for example, count the number of stops per zipcode. Note that when performing calculations on an sf object, it is usually quicker if you drop the geometry first.
+
 ```{r}
 bus_zips |> 
   st_drop_geometry() |> 
@@ -100,6 +133,7 @@ bus_zips |>
 ```
 
 Now, we can plot the bus stops contained in a given zipcode.
+
 ```{r}
 zip = 37207
 
@@ -111,7 +145,8 @@ zipcodes |>
           aes(color = `Route Name`))
 ```
 
-Finally, if we want to make an interactive map, we can use the leaflet library (https://rstudio.github.io/leaflet/).
+Finally, if we want to make an interactive map, we can use the leaflet library (<https://rstudio.github.io/leaflet/>).
+
 ```{r}
 library(leaflet)
 ```
@@ -130,6 +165,7 @@ leaflet(data = bus_stops |>
 ```
 
 You can also do marker clusters.
+
 ```{r}
 leaflet(bus_stops |> drop_na(longitude)) %>% 
   addTiles() %>% 
